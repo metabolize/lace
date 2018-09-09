@@ -2,9 +2,9 @@ from lace.serialization.obj.objutils import LoadObjError # lint isn't able to fi
 
 EXTENSION = '.obj'
 
-def load(f, existing_mesh=None):
+def load(f, existing_mesh=None, with_quads=False):
     from baiji.serialization.util.openlib import ensure_file_open_and_call
-    return ensure_file_open_and_call(f, _load, mode='rb', mesh=existing_mesh)
+    return ensure_file_open_and_call(f, _load, mode='rb', mesh=existing_mesh, with_quads=with_quads)
 
 def dump(obj, f, flip_faces=False, ungroup=False, comments=None,
          copyright=False, split_normals=False, write_mtl=True): # pylint: disable=redefined-outer-name, redefined-builtin, unused-argument
@@ -15,7 +15,7 @@ def dump(obj, f, flip_faces=False, ungroup=False, comments=None,
                                      ungroup=ungroup, comments=comments,
                                      split_normals=split_normals, write_mtl=write_mtl)
 
-def _load(fd, mesh=None):
+def _load(fd, mesh=None, with_quads=False):
     from collections import OrderedDict
     from baiji import s3
     from lace.mesh import Mesh
@@ -23,8 +23,24 @@ def _load(fd, mesh=None):
     import lace.serialization.obj.objutils as objutils # pylint: disable=no-name-in-module
 
     v, vt, vn, vc, f, ft, fn, f4, ft4, fn4, mtl_path, landm, segm = objutils.read(fd.name)
+
     if not mesh:
-        mesh = Mesh()
+        mesh = Mesh(with_quads=with_quads)
+
+    # When loading a quad mesh, the legacy behavior of the loader is to
+    # triangulate on load, filling f/ft/fn. Now it populates _both_ f/ft/fn
+    # and f4/ft4/fn4, and when with_quads=False, we want callers to get the
+    # original behavior, so we discard f4/ft4/fn4. When with_quads=True,
+    # we keep f4/ft4/fn4, discard f/ft/fn, and reject a triangular mesh.
+    if with_quads:
+        has_tris = [attr.size != 0 for attr in [f, ft, fn]]
+        has_quads = [attr.size != 0 for attr in [f4, ft4, fn4]]
+        if has_tris and not has_quads:
+            raise ValueError("Can't use with_quads=True to load a triangulated mesh")
+        f = ft = fn = np.empty((0, 3))
+    else:
+        f4 = ft4 = fn4 = np.empty((0, 4))
+
     if v.size != 0:
         mesh.v = v
     if f.size != 0:
